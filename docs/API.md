@@ -17,8 +17,8 @@
 | POST | /api/bookings | 学生提交预约；管理员调用返回 403 |
 | GET | /api/bookings | 学生自己的预约；管理员全部预约 |
 | POST | /api/bookings/{id}/cancel | 本人或管理员，开始前取消 |
-| POST | /api/bookings/{id}/approve | 管理员通过待审核预约 |
-| POST | /api/bookings/{id}/reject | 管理员拒绝待审核预约 |
+| POST | /api/bookings/{id}/approve | 管理员在时段开始前通过待审核预约 |
+| POST | /api/bookings/{id}/reject | 管理员在时段开始前拒绝待审核预约 |
 | POST | /api/bookings/{id}/check-in | 仅预约学生本人，在签到时间窗内签到；管理员返回 403 |
 | POST | /api/admin/venues | 管理员新增场馆 |
 | PUT | /api/admin/venues/{id} | 管理员修改场馆 |
@@ -33,9 +33,9 @@
 
 时段状态：`AVAILABLE` 可预约、`BUSY` 已占用、`EXPIRED` 已开始、`CLOSED` 场馆未开放。
 
-预约状态：`PENDING` 待审核、`APPROVED` 已通过、`REJECTED` 未通过、`CANCELLED` 已取消、`CHECKED_IN` 已签到。当前未自动将过期预约变更为独立状态。
+预约状态：`PENDING` 待审核、`APPROVED` 已通过、`REJECTED` 未通过、`CANCELLED` 已取消、`CHECKED_IN` 已签到。到开始时间仍未审核的申请返回 `EXPIRED`（已过期），释放该预约中仍未开始的时段。预约结束后，已通过却未签到的记录返回 `NO_SHOW`（未签到）。这两个状态在查询时计算，无需更新数据库字段或迁移旧数据。
 
-预约响应包含 `availableActions`，由服务端按当前身份、状态和签到时间窗计算，取值为 `approve`、`reject`、`cancel`、`check-in`。首页 `recentBookings` 与完整列表返回相同字段。客户端每 30 秒刷新可见列表，操作成功后立即更新；实际提交仍会由服务端重新校验权限和时间。
+预约响应包含 `availableActions`，由服务端按当前身份、状态和签到时间窗计算，取值为 `approve`、`reject`、`cancel`、`check-in`。首页 `recentBookings` 最多返回五条记录，字段与完整列表一致。首页待审核和今日有效预约排除已过期申请，今日有效预约也排除未签到记录；七日统计包含已通过但未签到的预约。客户端每 30 秒刷新可见列表，操作成功后立即更新；实际提交仍会由服务端重新校验权限和时间。
 
 场馆请求字段：`campus`（所属校区，必填）、`name`、`category`、`location`、`description`、`capacity`、`openHour`、`closeHour`、`enabled`、`theme`。运动类型限羽毛球/篮球/游泳/健身/足球/网球，封面风格限 court/pool/studio/field。
 

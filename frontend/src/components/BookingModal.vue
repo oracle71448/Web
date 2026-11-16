@@ -18,7 +18,8 @@ const dialog = ref<HTMLDialogElement>(),
   slots = ref<Slot[]>([]),
   loading = ref(true),
   busy = ref(false),
-  error = ref('')
+  slotError = ref(''),
+  submitError = ref('')
 const maxDate = computed(() => {
   const d = new Date(`${localDate()}T12:00:00+08:00`)
   d.setDate(d.getDate() + 14)
@@ -27,22 +28,42 @@ const maxDate = computed(() => {
 const displayedSlots = computed(() =>
   slots.value.filter((s) => !canBook.value || s.hour + durationHours.value <= props.venue.closeHour),
 )
+const canSubmit = computed(
+  () =>
+    canBook.value &&
+    props.venue.enabled &&
+    !loading.value &&
+    !busy.value &&
+    hour.value !== null &&
+    selectable(hour.value),
+)
 let loadId = 0
 async function loadSlots() {
   const id = ++loadId
-  loading.value = true
-  error.value = ''
+  const selectedDate = date.value
+  loading.value = Boolean(selectedDate)
+  slotError.value = ''
+  slots.value = []
   hour.value = null
+  if (!selectedDate) return
+
   try {
-    const result = await request<Slot[]>(`/api/venues/${props.venue.id}/slots?date=${date.value}`)
+    const result = await request<Slot[]>(`/api/venues/${props.venue.id}/slots?date=${selectedDate}`)
     if (id === loadId) slots.value = result
   } catch (e) {
-    if (id === loadId) error.value = (e as Error).message
+    if (id === loadId) slotError.value = (e as Error).message
   } finally {
     if (id === loadId) loading.value = false
   }
 }
-watch(date, loadSlots)
+watch(
+  date,
+  () => {
+    submitError.value = ''
+    void loadSlots()
+  },
+  { flush: 'sync' },
+)
 watch(durationHours, () => {
   hour.value = null
 })
@@ -59,10 +80,13 @@ onMounted(() => {
   dialog.value?.showModal()
   void loadSlots()
 })
+function close() {
+  if (!busy.value) emit('close')
+}
 async function submit() {
-  if (!canBook.value || hour.value === null) return
+  if (!canSubmit.value) return
   busy.value = true
-  error.value = ''
+  submitError.value = ''
   try {
     await request('/api/bookings', {
       method: 'POST',
@@ -79,9 +103,8 @@ async function submit() {
     emit('booked')
     emit('close')
   } catch (e) {
-    const message = (e as Error).message
+    submitError.value = (e as Error).message
     await loadSlots()
-    error.value = message
   } finally {
     busy.value = false
   }
@@ -89,21 +112,14 @@ async function submit() {
 const slotLabel = { AVAILABLE: '可预约', BUSY: '已占用', EXPIRED: '已过时', CLOSED: '未开放' }
 </script>
 <template>
-  <dialog
-    ref="dialog"
-    class="booking-dialog"
-    @cancel.prevent="emit('close')"
-    @click="
-      (e) => {
-        if (e.target === dialog) emit('close')
-      }
-    "
-  >
+  <dialog ref="dialog" class="booking-dialog" @cancel.prevent="close" @click.self="close">
     <div class="modal-header">
       <div>
         <h2>{{ canBook ? '预约场馆' : '场馆时段' }}</h2>
       </div>
-      <button class="icon-button" aria-label="关闭预约窗口" @click="emit('close')"><X :size="21" /></button>
+      <button class="icon-button" aria-label="关闭预约窗口" :disabled="busy" @click="close">
+        <X :size="21" />
+      </button>
     </div>
     <div class="modal-venue">
       <div class="modal-art"><VenueArt :theme="venue.theme" :category="venue.category" /></div>
@@ -118,9 +134,15 @@ const slotLabel = { AVAILABLE: '可预约', BUSY: '已占用', EXPIRED: '已过�
       </div>
     </div>
     <p class="venue-description">{{ venue.description }}</p>
-    <form @submit.prevent="submit">
+    <form :aria-busy="busy" @submit.prevent="submit">
       <label class="form-field"
-        >选择日期<input v-model="date" type="date" :min="localDate()" :max="maxDate" required
+        >选择日期<input
+          v-model="date"
+          type="date"
+          :min="localDate()"
+          :max="maxDate"
+          :disabled="busy"
+          required
       /></label>
       <label v-if="canBook" class="form-field"
         >预约时长
@@ -136,7 +158,11 @@ const slotLabel = { AVAILABLE: '可预约', BUSY: '已占用', EXPIRED: '已过�
         >
       </div>
       <div v-if="loading" class="inline-loading">正在查询可用时段…</div>
-      <div v-else class="slots-grid">
+      <div v-else-if="slotError">
+        <p class="form-error" role="alert">{{ slotError }}</p>
+        <button type="button" class="button secondary" :disabled="busy" @click="loadSlots">重试查询时段</button>
+      </div>
+      <div v-else-if="date" class="slots-grid">
         <button
           v-for="s in displayedSlots"
           :key="s.hour"
@@ -162,25 +188,26 @@ const slotLabel = { AVAILABLE: '可预约', BUSY: '已占用', EXPIRED: '已过�
             type="number"
             min="1"
             :max="venue.capacity"
+            :disabled="busy"
             required /></label
         ><label class="form-field"
-          >预约用途<select v-model="purpose" required>
+          >预约用途<select v-model="purpose" :disabled="busy" required>
             <option disabled value="">请选择用途</option>
             <option v-for="item in bookingPurposes" :key="item" :value="item">{{ item }}</option>
           </select></label
         >
       </div>
-      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+      <p v-if="submitError" class="form-error" role="alert">{{ submitError }}</p>
       <div v-if="canBook" class="booking-rules">
         可提前 14 天预约；待审核申请也会占用时段。<br />审核通过后，可在开始前 15 分钟至时段结束前签到。
       </div>
       <div class="modal-footer">
-        <button type="button" class="button secondary" :disabled="busy" @click="emit('close')">
+        <button type="button" class="button secondary" :disabled="busy" @click="close">
           {{ canBook ? '取消' : '关闭' }}</button
         ><button
           v-if="canBook"
           class="button primary"
-          :disabled="hour === null || loading || busy || !venue.enabled"
+          :disabled="!canSubmit"
         >
           {{ busy ? '正在提交…' : '确认预约' }}<ArrowRight :size="16" />
         </button>

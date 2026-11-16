@@ -1210,11 +1210,13 @@ svg {
   background: #ecf3f8;
   color: #6d90a5;
 }
-.status-badge.REJECTED {
+.status-badge.REJECTED,
+.status-badge.NO_SHOW {
   background: #fbeeea;
   color: #b5826f;
 }
-.status-badge.CANCELLED {
+.status-badge.CANCELLED,
+.status-badge.EXPIRED {
   background: #f1f3ee;
   color: #97a090;
 }

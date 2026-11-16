@@ -48,6 +48,20 @@ class BookingIntegrationTest {
     }
     ApiModels.BookingRequest requestAt(int hour) { return new ApiModels.BookingRequest(venue.id, tomorrow, hour, 1, 2, "双打练习"); }
 
+    private Booking saveBooking(String username, LocalDate date, int startHour, int durationHours, Booking.Status status) {
+        Booking booking = new Booking();
+        booking.user = users.findByUsername(username).orElseThrow();
+        booking.venue = venue;
+        booking.date = date;
+        booking.startHour = startHour;
+        booking.durationHours = durationHours;
+        booking.status = status;
+        booking.participants = 2;
+        booking.purpose = "晨练";
+        booking.createdAt = tomorrow.minusDays(2).atTime(12, 0);
+        return bookings.save(booking);
+    }
+
     @Test void unauthenticatedCannotReadAndCsrfRequired() throws Exception {
         mvc.perform(get("/api/venues")).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/bookings").with(user("student").roles("STUDENT"))
@@ -96,6 +110,34 @@ class BookingIntegrationTest {
         mvc.perform(get("/api/dashboard").with(user("student").roles("STUDENT")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.recentBookings[0].status").value("CHECKED_IN"));
     }
+    @Test void dashboardCountsBookingsByRoleAndLimitsRecentResults() throws Exception {
+        LocalDate today = tomorrow.minusDays(1);
+        saveBooking("student", today, 8, 1, Booking.Status.PENDING);
+        saveBooking("student", today, 7, 1, Booking.Status.APPROVED);
+        saveBooking("student", today, 7, 2, Booking.Status.APPROVED);
+        saveBooking("student", today.minusDays(1), 8, 1, Booking.Status.CHECKED_IN);
+        saveBooking("student", today, 9, 1, Booking.Status.CANCELLED);
+        Booking latestStudentBooking = saveBooking("student", today, 10, 1, Booking.Status.REJECTED);
+        Booking latestBooking = saveBooking("student2", today, 9, 1, Booking.Status.PENDING);
+
+        mvc.perform(get("/api/dashboard").with(user("student").roles("STUDENT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalBookings").value(6))
+                .andExpect(jsonPath("$.todayBookings").value(1))
+                .andExpect(jsonPath("$.pendingBookings").value(0))
+                .andExpect(jsonPath("$.trend[5].count").value(1))
+                .andExpect(jsonPath("$.trend[6].count").value(2))
+                .andExpect(jsonPath("$.recentBookings.length()").value(5))
+                .andExpect(jsonPath("$.recentBookings[0].id").value(latestStudentBooking.id.intValue()));
+        mvc.perform(get("/api/dashboard").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalBookings").value(7))
+                .andExpect(jsonPath("$.todayBookings").value(2))
+                .andExpect(jsonPath("$.pendingBookings").value(1))
+                .andExpect(jsonPath("$.trend[6].count").value(3))
+                .andExpect(jsonPath("$.recentBookings.length()").value(5))
+                .andExpect(jsonPath("$.recentBookings[0].id").value(latestBooking.id.intValue()));
+    }
     @Test void studentCannotChangeVenuesOrReviewOthers() throws Exception {
         mvc.perform(post("/api/admin/venues").with(user("student").roles("STUDENT")).with(csrf()).contentType("application/json").content("{}"))
             .andExpect(status().isForbidden());
@@ -136,16 +178,16 @@ class BookingIntegrationTest {
     @Test void cancellationReleasesSlotAndApprovalAllowsOnlyValidTransitions() {
         var first = service.create("student", requestAt(18));
         assertEquals(409, assertThrows(ResponseStatusException.class, () -> service.create("student2", requestAt(18))).getStatusCode().value());
-        assertEquals(Booking.Status.CANCELLED, service.changeStatus("student", first.id(), "cancel").status());
+        assertEquals("CANCELLED", service.changeStatus("student", first.id(), "cancel").status());
         var second = service.create("student2", requestAt(18));
-        assertEquals(Booking.Status.APPROVED, service.changeStatus("admin", second.id(), "approve").status());
+        assertEquals("APPROVED", service.changeStatus("admin", second.id(), "approve").status());
         assertThrows(ResponseStatusException.class, () -> service.changeStatus("admin", second.id(), "reject"));
         assertThrows(ResponseStatusException.class, () -> service.changeStatus("student2", second.id(), "check-in"));
     }
     @Test void rejectionReleasesSlotAndClosedVenueRejectsBookings() {
         var first = service.create("student", requestAt(18));
-        assertEquals(Booking.Status.REJECTED, service.changeStatus("admin", first.id(), "reject").status());
-        assertEquals(Booking.Status.PENDING, service.create("student2", requestAt(18)).status());
+        assertEquals("REJECTED", service.changeStatus("admin", first.id(), "reject").status());
+        assertEquals("PENDING", service.create("student2", requestAt(18)).status());
         venue.enabled = false; venues.save(venue);
         assertEquals(409, assertThrows(ResponseStatusException.class, () -> service.create("student", requestAt(19))).getStatusCode().value());
         assertTrue(service.slots(venue.id, tomorrow).stream().allMatch(s -> s.status().equals("CLOSED")));
@@ -155,7 +197,7 @@ class BookingIntegrationTest {
         booking.date = tomorrow.minusDays(1); booking.startHour = 8; booking.participants = 2; booking.purpose = "晨练";
         booking.status = Booking.Status.APPROVED; booking.createdAt = tomorrow.minusDays(2).atTime(12, 0);
         booking = bookings.save(booking);
-        assertEquals(Booking.Status.CHECKED_IN, service.changeStatus("student", booking.id, "check-in").status());
+        assertEquals("CHECKED_IN", service.changeStatus("student", booking.id, "check-in").status());
         Long id = booking.id;
         assertThrows(ResponseStatusException.class, () -> service.changeStatus("student", id, "check-in"));
     }
@@ -171,7 +213,26 @@ class BookingIntegrationTest {
                     .andExpect(status().isForbidden());
         }
         assertEquals(Booking.Status.APPROVED, bookings.findById(b.id).orElseThrow().status);
-        assertEquals(Booking.Status.CHECKED_IN, service.changeStatus("student", b.id, "check-in").status());
+        assertEquals("CHECKED_IN", service.changeStatus("student", b.id, "check-in").status());
+    }
+    @Test void pendingBookingExpiresAtStartAndReleasesRemainingTime() throws Exception {
+        LocalDate today = tomorrow.minusDays(1);
+        Booking expired = saveBooking("student", today, 8, 2, Booking.Status.PENDING);
+
+        mvc.perform(get("/api/bookings").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("EXPIRED"))
+                .andExpect(jsonPath("$[0].availableActions").isEmpty());
+        for (String action : List.of("approve", "reject")) {
+            mvc.perform(post("/api/bookings/" + expired.id + "/" + action).with(user("admin").roles("ADMIN")).with(csrf()))
+                    .andExpect(status().isConflict());
+        }
+        var slots = service.slots(venue.id, today);
+        assertEquals(new ApiModels.Slot(8, "EXPIRED"), slots.getFirst());
+        assertEquals(new ApiModels.Slot(9, "AVAILABLE"), slots.get(1));
+        assertEquals("PENDING", service.create("student2",
+                new ApiModels.BookingRequest(venue.id, today, 9, 1, 2, "晨练")).status());
+        assertEquals(Booking.Status.PENDING, bookings.findById(expired.id).orElseThrow().status);
     }
     @Test void twoHourBookingOccupiesBothHoursAndCancellationReleasesBoth() {
         var two = service.create("student", new ApiModels.BookingRequest(venue.id, tomorrow, 18, 2, 2, "日常锻炼"));
@@ -202,10 +263,12 @@ class BookingIntegrationTest {
         b.participants = 2; b.purpose = "日常锻炼"; b.createdAt = b.date.atStartOfDay();
         b = bookings.save(b);
         assertTrue(service.list("student").getFirst().availableActions().contains("check-in"));
-        assertEquals(Booking.Status.CHECKED_IN, service.changeStatus("student", b.id, "check-in").status());
+        assertEquals("CHECKED_IN", service.changeStatus("student", b.id, "check-in").status());
         b.startHour = 6; b.status = Booking.Status.APPROVED; b = bookings.save(b);
         Long id = b.id;
-        assertFalse(service.list("student").getFirst().availableActions().contains("check-in"));
+        var ended = service.list("student").getFirst();
+        assertEquals("NO_SHOW", ended.status());
+        assertTrue(ended.availableActions().isEmpty());
         assertEquals(409, assertThrows(ResponseStatusException.class, () -> service.changeStatus("student", id, "check-in")).getStatusCode().value());
     }
     @Test void concurrentBookingHasExactlyOneWinner() throws Exception {
