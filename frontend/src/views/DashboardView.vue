@@ -18,7 +18,8 @@ import type { Dashboard, Venue, Booking } from '../types'
 const data = ref<Dashboard>(),
   venues = ref<Venue[]>([]),
   loading = ref(true),
-  error = ref('')
+  error = ref(''),
+  refreshError = ref('')
 async function load() {
   loading.value = true
   error.value = ''
@@ -38,9 +39,12 @@ async function refresh() {
   const version = ++refreshVersion
   try {
     const result = await request<Dashboard>('/api/dashboard')
-    if (version === refreshVersion) data.value = result
+    if (version === refreshVersion) {
+      data.value = result
+      refreshError.value = ''
+    }
   } catch (e) {
-    if (version === refreshVersion) error.value = (e as Error).message
+    if (version === refreshVersion) refreshError.value = (e as Error).message
   }
 }
 function updated(booking: Booking) {
@@ -99,6 +103,7 @@ const stats = computed(() => [
   </div>
   <div v-else-if="loading" class="loading-state">加载中…</div>
   <template v-else-if="data">
+    <p v-if="refreshError" class="form-error" role="status">刷新工作台失败。{{ refreshError }}</p>
     <section class="stats-grid" aria-label="预约概况">
       <div v-for="s in stats" :key="s.title" class="stat-card">
         <div class="stat-top">
@@ -116,7 +121,7 @@ const stats = computed(() => [
         <div class="section-heading">
           <div>
             <h2>预约统计</h2>
-            <p>{{ user?.role === 'ADMIN' ? '近 7 天全校有效预约' : '近 7 天我的有效预约' }}</p>
+            <p>{{ user?.role === 'ADMIN' ? '近 7 天全校预约' : '近 7 天我的预约' }}</p>
           </div>
           <span class="chip">近 7 天</span>
         </div>
@@ -129,7 +134,7 @@ const stats = computed(() => [
             <span class="chart-label">{{ point.date.slice(5).replace('-', '/') }}</span>
           </div>
         </div>
-        <div class="chart-foot"><span class="online-dot"></span>按使用日期统计 · 不含已取消及未通过预约</div>
+        <div class="chart-foot"><span class="online-dot"></span>按使用日期统计，包含已通过但未签到的预约</div>
       </section>
       <section class="panel quick-panel">
         <div class="section-heading">

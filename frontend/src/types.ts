@@ -17,7 +17,7 @@ export interface Venue {
   enabled: boolean
   theme: 'court' | 'pool' | 'studio' | 'field'
 }
-export type BookingStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN'
+export type BookingStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN' | 'EXPIRED' | 'NO_SHOW'
 export type BookingAction = 'approve' | 'reject' | 'cancel' | 'check-in'
 export interface Booking {
   id: number
@@ -53,6 +53,8 @@ export const statusLabels: Record<BookingStatus, string> = {
   REJECTED: '未通过',
   CANCELLED: '已取消',
   CHECKED_IN: '已签到',
+  EXPIRED: '已过期',
+  NO_SHOW: '未签到',
 }
 export const hourText = (hour: number) => `${String(hour).padStart(2, '0')}:00`
 export function localDate(date = new Date()) {

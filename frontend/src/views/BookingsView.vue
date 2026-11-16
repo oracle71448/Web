@@ -11,7 +11,8 @@ const bookings = ref<Booking[]>([]),
   status = ref('ALL'),
   query = ref(''),
   loading = ref(true),
-  error = ref('')
+  error = ref(''),
+  refreshError = ref('')
 const route = useRoute()
 watch(
   () => route.query.status,
@@ -43,14 +44,21 @@ async function load() {
   }
 }
 onMounted(load)
+let refreshVersion = 0
 function updated(booking: Booking) {
+  refreshVersion++
   bookings.value = bookings.value.map((b) => (b.id === booking.id ? booking : b))
 }
 async function refresh() {
+  const version = ++refreshVersion
   try {
-    bookings.value = await request<Booking[]>('/api/bookings')
+    const result = await request<Booking[]>('/api/bookings')
+    if (version === refreshVersion) {
+      bookings.value = result
+      refreshError.value = ''
+    }
   } catch (e) {
-    error.value = (e as Error).message
+    if (version === refreshVersion) refreshError.value = (e as Error).message
   }
 }
 </script>
@@ -93,7 +101,10 @@ async function refresh() {
       {{ error }}<button class="button secondary" @click="load">重新加载</button>
     </div>
     <div v-else-if="loading" class="loading-state">正在加载预约…</div>
-    <BookingTable v-else :bookings="filtered" @updated="updated" @refresh="refresh" />
+    <template v-else>
+      <p v-if="refreshError" class="form-error" role="status">刷新预约失败。{{ refreshError }}</p>
+      <BookingTable :bookings="filtered" @updated="updated" @refresh="refresh" />
+    </template>
   </section>
   <p class="page-note">预约以审核结果为准；可在时段开始前取消。签到开放时间为开始前 15 分钟至时段结束前。</p>
 </template>
